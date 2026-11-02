@@ -514,6 +514,13 @@ def causal_conv1d_bwd_kernel(
                 p_dx, tl.cast(b_dx, dtype=p_dx.dtype.element_ty, fp_downcast_rounding="rtne"), boundary_check=(0, 1)
             )
 
+def causal_conv1d_chunk_size(batch: int, sequence: int) -> int:
+    return min(
+        32,
+        triton.next_power_of_2(
+            triton.cdiv(max(16, batch * sequence), get_vector_num())
+        ),
+    )
 
 @input_guard
 def causal_conv1d_fwd_impl(
@@ -525,6 +532,7 @@ def causal_conv1d_fwd_impl(
     output_final_state: bool = False,
     activation: Optional[str] = None,
     cu_seqlens: Optional[torch.Tensor] = None,
+    chunk_indices: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     shape = x.shape
     if x.shape[-1] != weight.shape[-1]:
@@ -540,7 +548,7 @@ def causal_conv1d_fwd_impl(
         BT = min(16, triton.next_power_of_2(triton.cdiv(max(16, B * T), NUM_CORES)))
     else:
         BD = 256
-        BT = min(32, triton.next_power_of_2(triton.cdiv(max(16, B * T), NUM_CORES)))
+        BT = causal_conv1d_chunk_size(B, T)
     # Headwise sequence parallelism can yield 640 channels (Qwen4-Exp
     # U8CP2: (2 * 16 + 48) * 128 / 16). Retain full channel tiles while
     # shrinking within the existing UB budget and 32-channel alignment.
@@ -551,7 +559,8 @@ def causal_conv1d_fwd_impl(
     NUM_BLKS_D = triton.cdiv(D, BD)
 
     if cu_seqlens is not None:
-        chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
+        if chunk_indices is None:
+            chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
         NUM_CHKS = len(chunk_indices)
     else:
         chunk_indices = None
@@ -605,6 +614,7 @@ def causal_conv1d_bwd_impl(
     initial_state: Optional[torch.Tensor] = None,
     activation: str = None,
     cu_seqlens: Optional[torch.Tensor] = None,
+    chunk_indices: Optional[torch.Tensor] = None,
 ):
     shape = x.shape
     if x.shape[-1] != weight.shape[-1]:
@@ -655,13 +665,14 @@ def causal_conv1d_bwd_impl(
         BT = max(BT, triton.next_power_of_2(W))
     else:
         BD = 32
-        BT = min(32, triton.next_power_of_2(triton.cdiv(max(16, B * T), NUM_CORES)))
+        BT = causal_conv1d_chunk_size(B, T)
     if D % BD != 0:
         raise ValueError("D must be divisible by BD.")
     NUM_BLKS_D = triton.cdiv(D, BD)
 
     if cu_seqlens is not None:
-        chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
+        if chunk_indices is None:
+            chunk_indices = prepare_chunk_indices(cu_seqlens, BT)
         NUM_CHKS = len(chunk_indices)
 
         NT = len(chunk_indices)
@@ -682,6 +693,8 @@ def causal_conv1d_bwd_impl(
             activation=None,
             cu_seqlens=cu_seqlens,
             output_final_state=False,
+            # Initial-state forward/backward can use different tile lengths.
+            chunk_indices=chunk_indices if initial_state is None else None,
         )
     dx = torch.empty_like(x)
     dw = weight.new_empty(B * NT, W, D, dtype=torch.float) if weight is not None else None
