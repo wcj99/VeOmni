@@ -23,7 +23,9 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .....distributed.moe import cumsum_to_counts, dispatch_to_ep_class
+from .....distributed.moe.forced_balance import force_balanced_routing
 from .....distributed.parallel_state import get_parallel_state
+from .....utils.env import get_env
 from ..shared.activation import is_silu
 
 
@@ -196,9 +198,22 @@ def npu_ep_fused_moe_forward(
 
     Accepts either split fc1 weights or a merged fc1_1_2_weight tensor. The all-to-all
     plumbing is shared with every other fused row; only the per-rank math is Ascend's.
+
+    VEOMNI_MOE_FORCE_BALANCE=1 replaces expert choices with synthetic balanced
+    routing for performance experiments. It is disabled by default.
     """
+    force_balance = get_env("VEOMNI_MOE_FORCE_BALANCE") == "1"
+    if force_balance:
+        original_tokens = routing_weights.shape[0]
+        hidden_states, routing_weights, selected_experts = force_balanced_routing(
+            hidden_states,
+            routing_weights,
+            selected_experts,
+            num_experts,
+            1 if ep_group is None else dist.get_world_size(ep_group),
+        )
     fc1_weight = _fc1_weight(fc1_1_weight, fc1_2_weight, fc1_1_2_weight).transpose(1, 2)
-    return dispatch_to_ep_class(
+    output = dispatch_to_ep_class(
         _npu_expert_math,
         num_experts,
         routing_weights,
@@ -208,6 +223,7 @@ def npu_ep_fused_moe_forward(
         fc2_weight.transpose(1, 2),
         swiglu_limit,
     )
+    return output[:original_tokens] if force_balance else output
 
 
 def npu_fused_moe_forward(
