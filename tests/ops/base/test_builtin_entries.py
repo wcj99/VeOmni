@@ -115,6 +115,7 @@ _BUILTIN_ENTRIES = (
     ("rms_norm_gated", "standard", "fla", "mlu", _MLU, ("fla",)),
     ("rms_norm_gated", "standard", "fla", "npu", _NPU, ("fla",)),
     ("rms_norm_gated", "standard", "torch_npu", "npu", _NPU, ()),
+    ("rms_norm_gated", "standard", "triton", "npu", _NPU, ("triton",)),
     ("causal_conv1d", "standard", "eager", "any", _ANY, ()),
     ("causal_conv1d", "standard", "fla", "cuda", _GPU, ("fla",)),
     ("causal_conv1d", "standard", "fla", "mlu", _MLU, ("fla",)),

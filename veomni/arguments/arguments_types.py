@@ -1518,7 +1518,8 @@ class OpsImplementationConfig:
             "'fla' (default) uses fla.modules.FusedRMSNormGated (requires flash-linear-attention, GPU, MLU, or NPU). "
             "'eager' uses the HuggingFace Qwen3_5RMSNormGated. "
             "'torch_npu' uses npu_rms_norm, fuses a SiLU gate with npu_swiglu (Qwen3.5), "
-            "and keeps the eager gate multiply for sigmoid (Qwen4-Exp's output_gate_type)."
+            "and keeps the eager gate multiply for sigmoid (Qwen4-Exp's output_gate_type). "
+            "'triton' opts into fused forward/backward on Ascend (requires triton-ascend)."
         },
     )
     causal_conv1d_implementation: str = field(

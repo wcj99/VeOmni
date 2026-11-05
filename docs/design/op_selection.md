@@ -27,7 +27,7 @@ If a field is not in this table, it is not an op-selection knob.
 | SwiGLU MLP | `swiglu_mlp_implementation` | `eager`, `liger_kernel` | `"liger_kernel"` (GPU, MLU), `"eager"` (NPU) | Model `__init__` via an instance-local `VeomniOp` |
 | Rotary embedding | `rotary_pos_emb_implementation` | `eager`, `liger_kernel`, `torch_npu`, `triton` (per-model; DeepSeek-V3, DeepSeek-V4, Wan) | `"liger_kernel"` (GPU, MLU), `"torch_npu"` (NPU) | Model `__init__` via an instance-local `VeomniOp` |
 | Vision-layout full rotary embedding | `rotary_pos_emb_vision_implementation` | `eager`, `torch_npu` | `"eager"` | Same `rope/full` op with an independent model-side implementation choice |
-| Gated RMSNorm | `rms_norm_gated_implementation` | `eager`, `fla`, `torch_npu` | `"fla"` (GPU) | Qwen3.5 model `__init__` via an instance-local `VeomniOp` |
+| Gated RMSNorm | `rms_norm_gated_implementation` | `eager`, `fla`, `torch_npu`, `triton` (Ascend) | `"fla"` (GPU) | Qwen3.5 model `__init__` via an instance-local `VeomniOp` |
 | Causal Conv1D | `causal_conv1d_implementation` | `eager`, `fla`, `triton` | `"fla"` (GPU) | Qwen3.5 model `__init__` via an instance-local `VeomniOp` |
 | Gated delta rule | `chunk_gated_delta_rule_implementation` | `eager`, `fla`, `flash_qla` (SM90), `triton`, `fla_npu` | `"fla"` (GPU) | Qwen3.5 model `__init__` via an instance-local `VeomniOp` |
 | Load-balancing loss | `load_balancing_loss_implementation` | `eager`, `triton` (GPU) | `"triton"` (GPU), `"eager"` (NPU) | Model `__init__` via an instance-local `VeomniOp` |

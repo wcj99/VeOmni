@@ -47,6 +47,7 @@ from .chunk_gated_delta_rule.standard import triton as chunk_triton
 from .rms_norm_gated.standard import eager as rms_eager
 from .rms_norm_gated.standard import fla as rms_fla
 from .rms_norm_gated.standard import torch_npu as rms_torch_npu
+from .rms_norm_gated.standard import triton as rms_triton
 
 
 _GPU = GpuKernelRequirement()
@@ -98,6 +99,16 @@ register_op(
     description="Fused RMSNorm using torch_npu; SiLU uses npu_swiglu and sigmoid uses the eager gate",
     wrapper=rms_torch_npu.wrapper,
     requirement=NpuKernelRequirement(),
+)
+
+register_op(
+    "rms_norm_gated",
+    "standard",
+    "triton",
+    description="Ascend Triton fused RMSNorm, affine scale, and SiLU/sigmoid gate",
+    wrapper=rms_triton.wrapper,
+    requirement=NpuKernelRequirement(),
+    requires=("triton",),
 )
 
 register_op(
