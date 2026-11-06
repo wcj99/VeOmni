@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 from torch import Tensor
 from torch.autograd.function import once_differentiable
@@ -65,6 +67,23 @@ def _blocked_mask(indices: Tensor, kv_length: int) -> Tensor:
     slots = torch.where(indices >= 0, indices, kv_length).long()
     blocked.scatter_(-1, slots, 0)
     return blocked[..., :kv_length].unsqueeze(1).bool().contiguous()
+
+
+def _blocked_mask_triton(indices: Tensor, lower: int, upper: int) -> Tensor:
+    """Fuse slot preparation and reinterpret contiguous 0/1 bytes as a Bool mask."""
+    from ._triton_mask import prepare_slots
+
+    width = upper - lower
+    slots = prepare_slots(indices, lower, width)
+    blocked = torch.ones((*indices.shape[:-1], width + 1), dtype=torch.int8, device=indices.device)
+    blocked.scatter_(-1, slots, 0)
+    return blocked[..., :width].contiguous().view(torch.bool).unsqueeze(1)
+
+
+def _chunk_mask(indices: Tensor, lower: int, upper: int, use_triton: bool) -> Tensor:
+    if use_triton:
+        return _blocked_mask_triton(indices, lower, upper)
+    return _blocked_mask(indices - lower, upper - lower)
 
 
 def _kv_ranges(indices: Tensor, kv_length: int, chunk_size: int) -> list[tuple[int, int]]:
@@ -139,13 +158,20 @@ class _CompactFusedAttention(torch.autograd.Function):
         key, value = key.contiguous(), value.contiguous()
         output = torch.empty_like(query, memory_format=torch.contiguous_format)
         statistics = []
+        use_triton = os.environ.get("VEOMNI_QSA_TRITON_MASK", "0") == "1"
+        if use_triton:
+            try:
+                from triton._C import libtriton
+            except ImportError as exc:
+                raise RuntimeError("VEOMNI_QSA_TRITON_MASK=1 requires triton-ascend") from exc
+            if not hasattr(libtriton, "ascend"):
+                raise RuntimeError("VEOMNI_QSA_TRITON_MASK=1 requires the Triton Ascend backend")
         ranges = _kv_ranges(indices, key.shape[2], chunk_size)
         for block, start in enumerate(range(0, query.shape[2], chunk_size)):
             section = slice(start, start + chunk_size)
             q = query[:, :, section].contiguous()
             lo, hi = ranges[block]
-            local_indices = indices[:, section] - lo
-            blocked = _blocked_mask(local_indices, hi - lo)
+            blocked = _chunk_mask(indices[:, section], lo, hi, use_triton)
             result, maximum, denominator, *_ = _forward(
                 q, key[:, :, lo:hi].contiguous(), value[:, :, lo:hi].contiguous(), blocked, scale
             )
@@ -155,6 +181,7 @@ class _CompactFusedAttention(torch.autograd.Function):
             statistics.extend((maximum, denominator))
         ctx.save_for_backward(query, key, value, indices, output, *statistics)
         ctx.ranges = ranges
+        ctx.use_triton_mask = use_triton
         ctx.scale = scale
         ctx.chunk_size = chunk_size
         return output
@@ -171,7 +198,7 @@ class _CompactFusedAttention(torch.autograd.Function):
         for block, start in enumerate(range(0, query.shape[2], ctx.chunk_size)):
             section = slice(start, start + ctx.chunk_size)
             lo, hi = ctx.ranges[block]
-            blocked = _blocked_mask(indices[:, section] - lo, hi - lo)
+            blocked = _chunk_mask(indices[:, section], lo, hi, ctx.use_triton_mask)
             valid_rows = (indices[:, section] >= 0).any(-1)[:, None, :, None]
             dq, dk, dv = _backward(
                 query[:, :, section].contiguous(),
