@@ -20,43 +20,56 @@ import triton.language as tl
 from torch import Tensor
 
 
-@triton.jit(do_not_specialize=["total", "rows", "lower", "width"])
+@triton.jit(do_not_specialize=["batch_size", "batch_elements", "batch_stride", "programs_per_batch", "lower", "width"])
 def _slots(
     Indices,
     Slots,
-    total,
-    rows,
+    batch_size,
+    batch_elements,
+    batch_stride,
+    programs_per_batch,
     lower,
     width,
-    K: tl.constexpr,
-    SB: tl.constexpr,
-    SR: tl.constexpr,
-    SK: tl.constexpr,
+    INT32_VALUES: tl.constexpr,
     TILE: tl.constexpr,
 ):
-    for start in range(tl.program_id(0) * TILE, total, tl.num_programs(0) * TILE):
-        i = start.to(tl.int64) + tl.arange(0, TILE)
-        row = i // K
-        index = tl.load(Indices + row // rows * SB + row % rows * SR + i % K * SK, i < total, other=-1)
-        local = index.to(tl.int64) - lower
-        tl.store(Slots + i, tl.where((local >= 0) & (local < width), local, width), i < total)
+    pid = tl.program_id(0)
+    lane = pid % programs_per_batch
+    # Keep address arithmetic scalar until the contiguous tile offset.
+    for batch in range(pid // programs_per_batch, batch_size, tl.num_programs(0) // programs_per_batch):
+        src = batch.to(tl.int64) * batch_stride
+        dst = batch.to(tl.int64) * batch_elements
+        for start in range(lane * TILE, batch_elements, programs_per_batch * TILE):
+            i = start.to(tl.int64) + tl.arange(0, TILE)
+            index = tl.load(Indices + src + i, i < batch_elements, other=-1)
+            if INT32_VALUES:
+                local = index - lower
+            else:
+                local = index.to(tl.int64) - lower
+            slot = tl.where((local >= 0) & (local < width), local, width)
+            tl.store(Slots + dst + i, slot, i < batch_elements)
 
 
 def prepare_slots(indices: Tensor, lower: int, width: int) -> Tensor:
-    """Map strided global KV IDs to contiguous int64 scatter slots."""
+    """Map QSA IDs with contiguous rows within each batch to int64 slots."""
     slots = torch.empty(indices.shape, dtype=torch.int64, device=indices.device)
     if indices.numel():
-        _, rows, k = indices.shape
-        _slots[(min(48, triton.cdiv(indices.numel(), 2048)),)](
+        batch_size, rows, k = indices.shape
+        batch_elements = rows * k
+        active_batches = min(batch_size, 48)
+        tile = 2048
+        programs_per_batch = min(48 // active_batches, triton.cdiv(batch_elements, tile))
+        _slots[(active_batches * programs_per_batch,)](
             indices,
             slots,
-            indices.numel(),
-            rows,
+            batch_size,
+            batch_elements,
+            indices.stride(0),
+            programs_per_batch,
             lower,
             width,
-            k,
-            *indices.stride(),
-            2048,
+            indices.dtype == torch.int32 and 0 <= lower <= 2147483647 and 0 < width <= 2147483647,
+            tile,
             multibuffer=False,
         )
     return slots

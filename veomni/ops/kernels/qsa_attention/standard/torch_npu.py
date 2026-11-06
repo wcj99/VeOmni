@@ -81,7 +81,7 @@ def _blocked_mask_triton(indices: Tensor, lower: int, upper: int) -> Tensor:
 
 
 def _chunk_mask(indices: Tensor, lower: int, upper: int, use_triton: bool) -> Tensor:
-    if use_triton:
+    if use_triton and indices.stride(-1) == 1 and indices.stride(-2) == indices.shape[-1]:
         return _blocked_mask_triton(indices, lower, upper)
     return _blocked_mask(indices - lower, upper - lower)
 
