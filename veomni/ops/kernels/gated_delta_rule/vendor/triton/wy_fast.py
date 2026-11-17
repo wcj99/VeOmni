@@ -7,7 +7,7 @@ import torch
 import triton
 import triton.language as tl
 
-from .utils import prepare_chunk_indices, exp
+from .utils import prepare_chunk_indices, exp, is_arch35
 
 
 @triton.heuristics({
@@ -295,8 +295,11 @@ def prepare_wy_repr_bwd(
     BT = chunk_size
     chunk_indices = prepare_chunk_indices(cu_seqlens, BT) if cu_seqlens is not None else None
     NT = triton.cdiv(T, BT) if cu_seqlens is None else len(chunk_indices)
-    BK = 128
-    BV = 128
+    # Wide key heads on Ascend950 can produce non-finite dk with 128x128
+    # tiles. Reduce both tiles; reducing only one still fails repeated backward.
+    small_tiles = is_arch35() and K > 128
+    BK = 64 if small_tiles else 128
+    BV = 64 if small_tiles else 128
     beta = beta.transpose(1, 2).contiguous()
     g = g.transpose(1, 2).contiguous()
 

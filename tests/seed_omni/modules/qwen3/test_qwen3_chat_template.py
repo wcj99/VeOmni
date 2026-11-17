@@ -307,6 +307,11 @@ def test_qwen3_accelerated_packed_matches_separate_forwards_and_grads(monkeypatc
 def test_qwen3_accelerated_packed_flex_attention_builds_block_mask_and_matches_separate_forwards(monkeypatch):
     import copy
 
+    from torch._inductor.kernel.flex.flex_cpu import check_cpu_supported
+
+    if not check_cpu_supported():
+        pytest.skip("CPU FlexAttention is unsupported on this platform")
+
     import veomni.models.seed_omni.modules.qwen3.llm.accelerated.accelerated as qwen3_llm_acc
     from veomni.ops.kernels.attention import lookup
 

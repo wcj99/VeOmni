@@ -37,7 +37,7 @@ from veomni.ops.kernels.loss.token_logprobs.standard import eager as tlp_eager
 from veomni.ops.kernels.loss.token_logprobs.standard import flash_attn as tlp_flash_attn
 from veomni.ops.kernels.loss.token_logprobs.standard import torch_npu as tlp_torch_npu
 from veomni.utils.constants import IGNORE_INDEX
-from veomni.utils.device import IS_NPU_AVAILABLE
+from veomni.utils.device import IS_NPU_AVAILABLE, get_device_name
 
 
 @pytest.mark.launch_plan(provider=LaunchSpec(device="cpu"))
@@ -246,6 +246,14 @@ def test_npu_token_logprobs_matches_eager():
 @pytest.mark.skipif(not IS_NPU_AVAILABLE, reason="Ascend NPU required")
 def test_npu_chunk_logprobs_function_forward_and_backward(monkeypatch):
     """End-to-end ``chunk_logprobs_function`` forward and backward on Ascend NPU."""
+    device_name = get_device_name()
+    if device_name.startswith(("Ascend950", "Ascend910_95")):
+        # Re-enable after the fused kernel's A5 chunked-input issue is fixed.
+        pytest.skip(
+            f"Known A5 npu_cross_entropy_loss UB out-of-bounds for chunked inputs on {device_name} "
+            "(reproduced with CANN 9.2.0/9.2.1)"
+        )
+
     monkeypatch.setattr(cl, "get_parallel_state", lambda: SimpleNamespace(sp_enabled=False))
     device = torch.device("npu")
     torch.manual_seed(7)

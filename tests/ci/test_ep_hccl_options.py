@@ -167,4 +167,7 @@ def test_native_ep_hccl_mesh_and_collectives():
 
     if not IS_NPU_AVAILABLE or get_torch_device().device_count() < 4:
         pytest.skip("Requires four native Ascend devices")
+    device_names = (get_torch_device().get_device_name(index) for index in range(4))
+    if any("ascend950" in name.lower().replace(" ", "") for name in device_names):
+        pytest.skip("Ascend 950 does not support HCCL HOSTCPU_TS expansion")
     spawn_with_rendezvous(_native_ep_mesh_worker, nprocs=4)

@@ -38,7 +38,7 @@ from tests.ops.tol import (
 from tests.ops.utils import assert_gradient_direction_and_scale, is_nvidia_cuda_available, make_grad_leaves
 from veomni.ops import OP_REGISTRY, resolve_op
 from veomni.ops.kernels.mhc.pre import cann as pre_cann
-from veomni.utils.device import IS_NPU_AVAILABLE, get_device_type
+from veomni.utils.device import IS_NPU_AVAILABLE, get_device_name, get_device_type
 
 
 # Installed Transformers classes used as the mHC eager reference.
@@ -291,6 +291,9 @@ def test_mhc_cann_pre_post_matches_eager():
     torch.manual_seed(29)
     device = get_device_type()
     batch, seq_len, hc_mult, hidden = 1, 8, 4, 128
+    if get_device_name().startswith(("Ascend950", "Ascend910_95")):
+        # Ascend950 MhcPreSinkhorn supports hidden sizes 4096 and 7168.
+        hidden = 4096
     norm_eps, hc_eps, sinkhorn_iters = 1e-6, 1e-6, 20
     mix = (2 + hc_mult) * hc_mult
     x = torch.randn(batch, seq_len, hc_mult, hidden, device=device, dtype=torch.bfloat16)

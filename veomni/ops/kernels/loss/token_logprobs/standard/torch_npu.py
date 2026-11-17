@@ -30,9 +30,9 @@ def wrapper(
 ) -> Tensor:
     """Per-token ``log p(y_t)`` via ``torch_npu.npu_cross_entropy_loss``.
 
-    Fuses ``log_softmax``, target gather, and ``ignore_index`` zero-masking into
-    a single Ascend NPU kernel call instead of decomposing into separate
-    ``clamp + log_softmax + gather + where`` ops per chunk.
+    Fuses ``log_softmax`` and target gather into an Ascend NPU kernel call.
+    Explicitly zeroes ignored positions to preserve the eager contract on
+    runtimes whose fused kernel leaves those output slots unwritten.
     Lazy-imports ``torch_npu`` when ``IS_NPU_AVAILABLE`` holds.
     """
     if not IS_NPU_AVAILABLE:
@@ -50,4 +50,5 @@ def wrapper(
         ignore_index=ignore_index,
     )
     loss = outputs[0] if isinstance(outputs, tuple) else outputs
-    return -loss.view(batch_shape)
+    log_probs = -loss.view(batch_shape)
+    return log_probs.masked_fill(labels_1d.view(batch_shape) == ignore_index, 0.0)
