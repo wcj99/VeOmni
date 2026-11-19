@@ -1482,6 +1482,8 @@ class Qwen4ExpTextGatedResidual(nn.Module):
         self.input_mix_weight_down = nn.Linear(hc_hidden_size, config.hc_lowrank, bias=False)
         self.input_mix_weight_up = nn.Linear(config.hc_lowrank, hc_hidden_size, bias=False)
         self.block_inject_weight = nn.Linear(hc_hidden_size, self.hc_count, bias=False) if use_combine else None
+        self.qhc_implementation = config.ops_config.qhc_implementation
+        self.veomni_qhc = VeomniOp("qhc", "standard", self.qhc_implementation)
 
     def forward(
         self, hyper_input: torch.Tensor
@@ -1490,6 +1492,26 @@ class Qwen4ExpTextGatedResidual(nn.Module):
             raise ValueError(
                 f"Expected {self.hc_count * self.hidden_size} hyper-connection features, got {hyper_input.shape[-1]}."
             )
+        if self.qhc_implementation != "eager":
+            projections = (self.input_mix_weight_down, self.input_mix_weight_up)
+            if self.block_inject_weight is not None:
+                projections += (self.block_inject_weight,)
+            if any(type(layer) is not nn.Linear or layer.bias is not None for layer in projections):
+                raise ValueError("Fused QHC requires plain bias-free nn.Linear projections; use eager for adapters")
+            result = self.veomni_qhc(
+                hyper_input,
+                self.hc_norm.weight,
+                self.input_mix_weight_down.weight,
+                self.input_mix_weight_up.weight,
+                None if self.block_inject_weight is None else self.block_inject_weight.weight,
+                groups=self.hc_count,
+                hidden_size=self.hidden_size,
+                eps=self.hc_norm.eps,
+            )
+            if self.block_inject_weight is None:
+                return result
+            mixed_input, injection_weights = result
+            return mixed_input, hyper_input, injection_weights
         hyper_input_normed = self.hc_norm(hyper_input)
         input_mix_weight = F.silu(self.input_mix_weight_down(hyper_input_normed) / self.hc_count)
         input_mix_weight = torch.sigmoid(self.input_mix_weight_up(input_mix_weight))

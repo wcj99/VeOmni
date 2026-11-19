@@ -115,3 +115,26 @@ On a host with at least two CUDA or NPU devices, the test uses VLM dummy data,
 `ple_size=2`, `ep_size=2`, and `ulysses_size=2` to cover FSDP2 streaming load
 and a fused-MoE forward/backward training smoke with finite loss and gradient
 norm. It does not load the released 95 GiB PLE table.
+
+## Optional Ascend QHC fusion
+
+The gated residual mixer can use the kernels adapted from
+[MindSpeed-MM PR 3372](https://gitcode.com/Ascend/MindSpeed-MM/pull/3372)
+(head ae0baa568494c24281ae3204efe06c54d4f079ed).
+
+Set `model.ops_implementation.qhc_implementation: triton` to select
+Triton-Ascend grouped offset-RMSNorm and fused gate/reduction kernels.
+Projections remain native GEMMs. The default `eager` preserves existing
+module calls, including projection adapters. Fused implementations require
+plain bias-free Linear projections and same-dtype weights/activations.
+When autocast is active, operands must already have its target dtype; otherwise
+the fused path raises and the eager path remains available.
+Checkpoint parameter names and the residual tuple are unchanged.
+
+`ascendc` additionally requires the matching CANN ACLNN package and
+`cann_ops_transformer.ops.attention.text_gated_residual`.
+A base CANN installation alone does not guarantee that operator is present.
+Unavailable backends raise explicitly. Both optimized implementations support
+first-order gradients only. Fusion changes floating-point rounding; validate
+BF16 forward/backward and training convergence before enabling production runs.
+No end-to-end throughput improvement is claimed without measurement.

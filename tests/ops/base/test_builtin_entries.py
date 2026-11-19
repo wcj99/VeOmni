@@ -51,6 +51,9 @@ _MLU = ("mlu", ())
 
 
 _BUILTIN_ENTRIES = (
+    ("qhc", "standard", "eager", "any", _ANY, ()),
+    ("qhc", "standard", "triton", "npu", _NPU, ("triton",)),
+    ("qhc", "standard", "ascendc", "npu", _NPU, ("cann_ops_transformer",)),
     ("moe_unpermute", "standard", "eager", "any", _ANY, ()),
     ("moe_unpermute", "standard", "triton", "cuda", _GPU_NVIDIA_SM70, ("triton",)),
     ("async_ulysses_qkv", "standard", "eager", "any", _ANY, ()),

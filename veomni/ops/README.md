@@ -336,3 +336,5 @@ configuration defaults are unchanged. Requires `triton-ascend`, NPU tensors,
 a last dimension from 1 to 4096, and FP16/BF16/FP32 inputs with same-dtype or
 FP32 weights. Unsupported inputs fail explicitly. See
 `docs/usage/gdn_gated_rmsnorm_triton.md` for usage and verification.
+
+QHC (`qhc/standard`): `eager`, `triton` (Ascend), `ascendc` (optional CANN QHC). Select with `qhc_implementation`; default eager.

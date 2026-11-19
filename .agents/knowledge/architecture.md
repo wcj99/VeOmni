@@ -408,3 +408,5 @@ uses the registered `moe_unpermute` op with fused weighting/scatter on NVIDIA
 GPUs and eager PyTorch on other devices, retaining FP32 accumulation.
 
 Checkpoint planners live in `veomni/checkpoint/planner.py`; generic logical-row clipping and padded restore live in `row_crop.py`. Model-owned converters opt in with `checkpoint_row_counts()`, without checkpoint-layer imports of model packages. See `docs/design/qwen4_exp_ple_2d_parallelism.md` (Checkpoint row contract section).
+
+Qwen4-Exp QHC: `veomni/ops/kernels/qhc/` owns eager and optional Ascend fusion. The standalone `veomni/models/transformers/qwen4_exp/modeling_qwen4_exp.py` selects an instance-local `VeomniOp` using `config.ops_config.qhc_implementation`.

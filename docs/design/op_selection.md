@@ -1217,3 +1217,5 @@ implementation requires Triton and does not silently fall back if it is
 unavailable. It preserves promoted-dtype multiplication followed by FP32
 scatter accumulation; the EP dispatcher casts the combined result back to the
 original token dtype. See [FP8 MoE](deepgemm_moe.md#whole-expert-fsdp-sharding-and-ep-combine).
+
+Qwen4-Exp QHC uses `model.ops_implementation.qhc_implementation`: `eager` (default), `triton` (Ascend), or `ascendc` (matching optional CANN QHC package). Selection is instance-local at model construction.

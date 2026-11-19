@@ -1602,6 +1602,10 @@ class OpsImplementationConfig:
             "Unset: 'liger_kernel' on GPU/MLU, 'chunk_loss' on NPU."
         },
     )
+    qhc_implementation: str = field(
+        default="eager",
+        metadata={"help": "Qwen4-Exp QHC: eager (default), triton (Ascend), ascendc (optional CANN QHC package)."},
+    )
     rms_norm_implementation: Optional[str] = field(
         default=None,
         metadata={
