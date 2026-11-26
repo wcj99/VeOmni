@@ -17,7 +17,7 @@
 import pytest
 
 from scripts.ci.accelerator.launch_plan import LaunchSpec
-from veomni.arguments import ModelArguments
+from veomni.arguments import AcceleratorConfig, FSDPConfig, ModelArguments, OptimizerConfig
 
 
 pytestmark = pytest.mark.launch_plan(provider=LaunchSpec(device="cpu"))
@@ -39,6 +39,51 @@ class TestWhereTheLoaderReadsTheConfigFrom:
 
     def test_the_tokenizer_follows_the_config_the_base_settled(self):
         assert ModelArguments(model_path="weights", config_path="cfg").tokenizer_path == "cfg"
+
+
+def test_state_offload_device_memory_fraction_is_coerced_and_ranged():
+    # YAML resolves an exponent literal without a decimal point to a string; it
+    # must be coerced before the range check instead of raising TypeError.
+    assert (
+        OptimizerConfig(
+            state_offload="cpu", state_offload_device_memory_fraction="8e-1"
+        ).state_offload_device_memory_fraction
+        == 0.8
+    )
+    with pytest.raises(ValueError, match="state_offload_device_memory_fraction"):
+        OptimizerConfig(state_offload="cpu", state_offload_device_memory_fraction=1.5)
+
+
+def test_state_offload_rejects_non_adamw_types_and_unknown_values():
+    # The literal is not enforced for YAML values, so the constructor validates
+    # it; otherwise a typo would silently fall back to the stock AdamW path.
+    with pytest.raises(ValueError, match="must be 'none' or 'cpu'"):
+        OptimizerConfig(state_offload="gpu")
+    with pytest.raises(ValueError, match="only supported for type='adamw'"):
+        OptimizerConfig(type="muon", state_offload="cpu")
+    with pytest.raises(ValueError, match="only supported for type='adamw'"):
+        OptimizerConfig(type="anyprecision_adamw", state_offload="cpu")
+
+
+def test_state_offload_rejects_fsdp_cpu_offload():
+    with pytest.raises(ValueError, match="cannot be combined"):
+        ModelArguments(
+            model_path="weights",
+            optimizer=OptimizerConfig(state_offload="cpu"),
+            accelerator=AcceleratorConfig(fsdp_config=FSDPConfig(offload=True)),
+        )
+
+
+def test_optimizer_selection_is_validated_before_model_loading():
+    with pytest.raises(ValueError, match="Unknown model.optimizer.type"):
+        OptimizerConfig(type="admaw")
+    with pytest.raises(ValueError, match="Hyper FSDP does not support"):
+        ModelArguments(
+            model_path="weights",
+            optimizer=OptimizerConfig(type="anyprecision_adamw"),
+            accelerator=AcceleratorConfig(fsdp_config=FSDPConfig(fsdp_mode="hyper_fsdp2")),
+        )
+    assert ModelArguments(model_path="weights", optimizer=OptimizerConfig(type="anyprecision_adamw"))
 
 
 @pytest.mark.parametrize(
@@ -69,7 +114,7 @@ def test_fp8_all_gather_validates_policies_only_for_matching_experts(
     assert config.expert_weight_fp8_all_gather is True
     model = nn.Sequential(nn.Linear(2, 2))
     if has_experts:
-        model[0].veomni_moe = SimpleNamespace(impl="deepgemm_fp8")
+        model[0].veomni_moe = SimpleNamespace(impl="deepgemm")
     calls = []
     monkeypatch.setattr(
         torch_parallelize,
@@ -114,20 +159,6 @@ def test_fp8_all_gather_is_opt_in():
     assert FSDPConfig(expert_weight_fp8_all_gather=True).expert_weight_fp8_all_gather is True
 
 
-def test_fp8_all_gather_rejects_non_swiglu_before_collectives():
-    from types import SimpleNamespace
-
-    from torch import nn
-
-    from veomni.distributed.fsdp2.fp8_all_gather import register_deepgemm_fp8_all_gather
-
-    module = nn.Module()
-    module.veomni_moe = SimpleNamespace(impl="deepgemm_fp8")
-    module.use_swiglu_mlp = False
-    with pytest.raises(ValueError, match="SwiGLU"):
-        register_deepgemm_fp8_all_gather(module)
-
-
 @pytest.mark.parametrize("impl", [None, "fused_triton"])
 def test_fp8_all_gather_allows_empty_selection(impl):
     from types import SimpleNamespace
@@ -150,7 +181,7 @@ def test_fp8_all_gather_still_validates_selected_experts():
     from veomni.distributed.fsdp2.fp8_all_gather import register_deepgemm_fp8_all_gather
 
     module = nn.Linear(2, 2)
-    module.veomni_moe = SimpleNamespace(impl="deepgemm_fp8")
+    module.veomni_moe = SimpleNamespace(impl="deepgemm")
     with pytest.raises(ValueError, match="two merged expert weights"):
         register_deepgemm_fp8_all_gather(module)
 

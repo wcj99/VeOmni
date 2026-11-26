@@ -153,6 +153,32 @@ def _reject_lora_that_matched_nothing(
     )
 
 
+def _reject_sp_handoff_unsupported_modules(module_runtimes: Mapping[str, ModuleRuntime]) -> None:
+    """Fail a ``skip_sp_gather_between_modules`` run that includes a module which cannot take part.
+
+    The switch is run-wide: it says *every* module's ``post_forward`` hands its
+    sequence-parallel shard to the next module instead of all-gathering. A module
+    that keeps gathering (``PretrainedOmniModule.supports_sp_sharded_handoff`` is
+    ``False``) would then feed a full-sequence tensor to a consumer that expects a
+    shard, or itself receive a shard it cannot parse. Refuse at build time rather
+    than let one boundary silently disagree with the switch.
+    """
+    unsupported = sorted(
+        name for name, runtime in module_runtimes.items() if not runtime.omni_module.supports_sp_sharded_handoff
+    )
+    if not unsupported:
+        return
+    raise ValueError(
+        "`model.accelerator.skip_sp_gather_between_modules=True` hands every module's sequence-parallel "
+        f"shard straight to the next module, but these modules do not implement that handoff: {unsupported}. "
+        "They gather unconditionally (or scatter through a packed layout instead of the carrier), so a "
+        "boundary involving one of them would pass a full-sequence tensor where a shard is expected. "
+        "Disable `skip_sp_gather_between_modules`, or set "
+        "`supports_sp_sharded_handoff = True` on those modules once their "
+        "post_forward hands its shard on."
+    )
+
+
 class OmniModelRuntime:
     """VeOmni model handle for one composed :class:`OmniModel`.
 
@@ -306,6 +332,10 @@ class OmniModelRuntime:
             self.model = build_parallelize_model(
                 self.model,
                 init_device=acc.init_device,
+                # A composed wrap always applies FSDP2 to the parent; the
+                # per-module plan is inside it, so `extra_parallel_only` cannot be
+                # used here (`_validate_composed_wrap` refuses that pairing).
+                extra_parallel_only=False,
                 weights_path=weights_path,
                 should_skip_hf_weight_load=False,
                 enable_reshard_after_forward=acc.fsdp_config.reshard_after_forward,
@@ -318,7 +348,7 @@ class OmniModelRuntime:
                 enable_fsdp_offload=acc.fsdp_config.offload,
                 fsdp_offload_pin_memory=acc.fsdp_config.offload_pin_memory,
                 broadcast_model_weights_from_rank0=args.broadcast_model_weights_from_rank0,
-                ep_sharded_stream_load=args.ep_sharded_stream_load,
+                extra_parallel_stream_load=args.extra_parallel_stream_load,
                 max_load_broadcast_size=acc.fsdp_config.max_load_broadcast_size,
                 muon_expert_zero_comm=muon_expert_zero_comm,
                 expert_weight_fp8_all_gather=acc.fsdp_config.expert_weight_fp8_all_gather,
@@ -469,11 +499,13 @@ class OmniModelRuntime:
         model.generation_graph.validate_modules({name: model.get_module(name) for name in model._module_names})
         generation_kwargs = model.resolve_generation_kwargs(generation_kwargs)
         max_new_tokens = generation_kwargs.get("max_new_tokens", 2048)
+        max_steps = max_new_tokens
         total_steps = 0
 
-        while not model.generation_graph.is_done() and total_steps < max_new_tokens:
+        while not model.generation_graph.is_done() and total_steps < max_steps:
             model._emit_progress(total_steps)
             state_name = model.generation_graph.current_state_name
+            emitted_before = len(model._generated)
             for node in model.generation_graph.iter_nodes(ctx):
                 execute_generation_node(
                     modules,
@@ -491,6 +523,10 @@ class OmniModelRuntime:
             fired = model.generation_graph.maybe_transition(ctx)
             if fired is not None and profiler is not None:
                 profiler.record(f"transition: {fired.from_state} -> {fired.to_state} [{fired.condition}]")
+            if total_steps == 1 and len(model._generated) == emitted_before:
+                # Pass 1 emitted nothing: it was prompt prefill, so it must not
+                # consume the token budget.
+                max_steps += 1
 
         model._emit_progress(total_steps)
 
@@ -697,6 +733,8 @@ def build_omni_model_runtime(
     )
     if not for_inference:
         _reject_lora_that_matched_nothing(module_runtimes, train_args)
+        if bool(omni_model_runtime_args.accelerator.skip_sp_gather_between_modules):
+            _reject_sp_handoff_unsupported_modules(module_runtimes)
     runtime = OmniModelRuntime(
         OmniModel(omni_config, {name: rt.omni_module for name, rt in module_runtimes.items()}),
         module_runtimes=module_runtimes,
